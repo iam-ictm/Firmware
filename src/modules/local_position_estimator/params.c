@@ -34,7 +34,7 @@ PARAM_DEFINE_FLOAT(LPE_FLW_VXY, 0.01f);
  * @max 1
  * @decimal 3
  */
-PARAM_DEFINE_FLOAT(LPE_FLW_VXY_D, 0.01f);
+PARAM_DEFINE_FLOAT(LPE_FLW_VXY_D, 0.2f);
 
 /**
  * Optical flow minimum quality threshold
@@ -372,7 +372,7 @@ PARAM_DEFINE_FLOAT(LPE_X_LP, 5.0f);
  * @max 1.0
  * @decimal 3
  */
-PARAM_DEFINE_FLOAT(LPE_VXY_PUB, 0.1f);
+PARAM_DEFINE_FLOAT(LPE_VXY_PUB, 0.5f);
 
 /**
  * Required z standard deviation to publish altitude/ terrain
