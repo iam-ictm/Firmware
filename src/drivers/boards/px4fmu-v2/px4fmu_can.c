@@ -106,6 +106,7 @@
  *
  ************************************************************************************/
 
+__EXPORT int can_devinit(void);
 int can_devinit(void)
 {
 	static bool initialized = false;
