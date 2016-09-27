@@ -180,6 +180,8 @@ set(config_module_list
 
 	# Hardware test
 	#examples/hwtest
+
+    examples/px4_hymog_can
 )
 
 set(config_extra_builtin_cmds
