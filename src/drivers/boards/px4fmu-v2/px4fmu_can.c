@@ -37,9 +37,9 @@
  * Board-specific CAN functions.
  */
 
-/************************************************************************************
+/****************************************************************************
  * Included Files
- ************************************************************************************/
+ ****************************************************************************/
 
 #include <px4_config.h>
 
@@ -58,23 +58,16 @@
 
 #ifdef CONFIG_CAN
 
-/************************************************************************************
+/****************************************************************************
  * Pre-processor Definitions
- ************************************************************************************/
-/* Configuration ********************************************************************/
+ ****************************************************************************/
 
-#if defined(CONFIG_STM32_CAN1) && defined(CONFIG_STM32_CAN2)
-#  warning "Both CAN1 and CAN2 are enabled.  Assuming only CAN1."
-#  undef CONFIG_STM32_CAN2
-#endif
+/* Configuration ************************************************************/
 
-#ifdef CONFIG_STM32_CAN1
-#  define CAN_PORT 1
-#else
-#  define CAN_PORT 2
-#endif
+#  define CAN_PORT_1 1
+#  define CAN_PORT_2 2
 
-/* Debug ***************************************************************************/
+/* Debug ********************************************************************/
 /* Non-standard debug that may be enabled just for testing CAN */
 
 #ifdef CONFIG_DEBUG_CAN
@@ -89,54 +82,77 @@
 #  define canllvdbg(x...)
 #endif
 
-/************************************************************************************
+/****************************************************************************
  * Private Functions
- ************************************************************************************/
+ ****************************************************************************/
 
-/************************************************************************************
+/****************************************************************************
  * Public Functions
- ************************************************************************************/
+ ****************************************************************************/
 
-/************************************************************************************
+/****************************************************************************
  * Name: can_devinit
  *
  * Description:
  *   All STM32 architectures must provide the following interface to work with
  *   examples/can.
  *
- ************************************************************************************/
+ ****************************************************************************/
 
 __EXPORT int can_devinit(void);
 int can_devinit(void)
 {
 	static bool initialized = false;
-	struct can_dev_s *can;
+	struct can_dev_s *can1, *can2;
 	int ret;
 
 	/* Check if we have already initialized */
 
 	if (!initialized) {
-		/* Call stm32_caninitialize() to get an instance of the CAN interface */
 
-		can = stm32_caninitialize(CAN_PORT);
+		/* Call stm32_caninitialize() to get instances of the CAN
+		interfaces */
+		can1 = stm32_caninitialize(CAN_PORT_1);
+		can2 = stm32_caninitialize(CAN_PORT_2);
 
-		if (can == NULL) {
-			candbg("ERROR:  Failed to get CAN interface\n");
+		if (can1 == NULL) {
+			candbg("ERROR:  Failed to get CAN interface 1\n");
 			return -ENODEV;
+		} else {
+			candbg("SUCCESS: Initialized CAN interface 1\n");
 		}
 
-		/* Register the CAN driver at "/dev/can0" */
+		if (can2 == NULL) {
+			candbg("ERROR:  Failed to get CAN interface 2\n");
+			return -ENODEV;
+		} else {
+			candbg("SUCCESS: Initialized CAN interface 2\n");
+		}
 
-		ret = can_register("/dev/can0", can);
+		/* Register the CAN driver at "/dev/canX" */
 
+		ret = can_register("/dev/can0", can1);
 		if (ret < 0) {
-			candbg("ERROR: can_register failed: %d\n", ret);
+			candbg("ERROR: can_register failed for bus 1: %d\n",
+				ret);
 			return ret;
+		} else {
+			candbg("SUCCESS: Registered /dev/can0");
+		}
+
+		ret = can_register("/dev/can1", can2);
+		if (ret < 0) {
+			candbg("ERROR: can_register failed for bus 2: %d\n",
+				ret);
+			return ret;
+		} else {
+			candbg("SUCCESS: Registered /dev/can0");
 		}
 
 		/* Now we are initialized */
 
 		initialized = true;
+		candbg("Initialization completed!");
 	}
 
 	return OK;
