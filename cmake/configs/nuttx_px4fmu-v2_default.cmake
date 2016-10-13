@@ -181,7 +181,8 @@ set(config_module_list
 	# Hardware test
 	#examples/hwtest
 
-    examples/px4_hymog_can
+	# RedCat applications
+	redcat/canproxy
 )
 
 set(config_extra_builtin_cmds

@@ -1,0 +1,13 @@
+#
+# For a description of the syntax of this configuration file,
+# see misc/tools/kconfig-language.txt.
+#
+
+config REDCAT_CANPROXY
+	bool "RedCat CAN proxy"
+	default n
+	---help---
+		Enable the CAN proxy
+
+if REDCAT_CANPROXY
+endif
