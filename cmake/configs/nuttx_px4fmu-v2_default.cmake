@@ -183,6 +183,7 @@ set(config_module_list
 
 	# RedCat applications
 	redcat/canproxy
+	redcat/uartpilot
 )
 
 set(config_extra_builtin_cmds
