@@ -174,34 +174,31 @@ int uartpilot_thread_main(int argc, char *argv[])
 		return -1;
 	}
 
-// struct actuator_outputs_s act_outputs;
-
-	int sub_controls = orb_subscribe(ORB_ID(actuator_controls_3));
 	int sub_armed = orb_subscribe(ORB_ID(actuator_armed));
 
-	px4_pollfd_struct_t fds[1];
-	fds[0].fd     = sub_controls;
-	fds[0].events = POLLIN;
-	/* Don't limit poll intervall for now, 250 Hz should be fine. */
-	//orb_set_interval(_sub_controls, 10);
+	struct actuator_armed_s s_armed;
+	s_armed.armed = false; // Start disarmed
+	s_armed.prearmed = false;
 
-	struct actuator_controls_s controls_s;
-	struct actuator_armed_s	armed_s;
-	
-	// Start disarmed
-	armed_s.armed = false;
-	armed_s.prearmed = false;
+	int sub_controls[1];
+	sub_controls[0] = orb_subscribe(ORB_ID(actuator_controls_0));
+	//orb_set_interval(_sub_controls, 10);    TODO Don't limit poll intervall for now, 250 Hz should be fine.
+
+	px4_pollfd_struct_t fds_poll[1];
+	fds_poll[0].fd     = sub_controls[0];
+	fds_poll[0].events = POLLIN;
+
+	struct actuator_controls_s s_controls;
 
 	thread_running = true;
-
-	dprintf(uart_fd, "$AGSTAT%d\r\n",thread_running);
+	dprintf(uart_fd, "$AGSTAT %d\r\n",thread_running);
 	while (!thread_should_exit) {
-		int pret = px4_poll(&fds[0], (sizeof(fds) / sizeof(fds[0])), UARTPILOT_POLL_MILIS);
+		int pret = px4_poll(fds_poll, (sizeof(fds_poll) / sizeof(fds_poll[0])), UARTPILOT_POLL_MILIS);
 
 #ifdef UARTPILOT_DEBUG
-		orb_copy(ORB_ID(actuator_armed), sub_armed, &armed_s);
+		orb_copy(ORB_ID(actuator_armed), sub_armed, &s_armed);
 		dprintf(uart_fd, "$DEBUG Poll returned %d\r\n", pret);
-		dprintf(uart_fd, "$DEBUG Armed: %d Prearmed: %d Ready to arm: %d Lockdown: %d Force Failsafe: %d ESC Calibration: %d\r\n", armed_s.armed, armed_s.prearmed, armed_s.ready_to_arm, armed_s.lockdown, armed_s.force_failsafe, armed_s.in_esc_calibration_mode);
+		dprintf(uart_fd, "$DEBUG Armed: %d Prearmed: %d Ready to arm: %d Lockdown: %d Force Failsafe: %d ESC Calibration: %d\r\n", s_armed.armed, s_armed.prearmed, s_armed.ready_to_arm, s_armed.lockdown, s_armed.force_failsafe, s_armed.in_esc_calibration_mode);
 #endif
 
 		/* Timed out, do a periodic check for _task_should_exit. */
@@ -212,31 +209,28 @@ int uartpilot_thread_main(int argc, char *argv[])
 		/* This is undesirable but not much we can do. */
 		if (pret < 0) {
 			PX4_WARN("poll error %d, %d", pret, errno);
-			/* sleep a bit before next try */
 			usleep(100000);
 			continue;
 		}
 
-		if (fds[0].revents & POLLIN) {
-			orb_copy(ORB_ID(actuator_controls_1), sub_controls, &controls_s);
-			orb_copy(ORB_ID(actuator_armed), sub_armed, &armed_s);
-
-			dprintf(uart_fd, "$AGCOD %f %f %f %f %f %f %f %f %llu\r\n", (double) controls_s.control[0], (double) controls_s.control[1], (double) controls_s.control[2], (double) controls_s.control[3], (double) controls_s.control[4], (double) controls_s.control[5], (double) controls_s.control[6], (double) controls_s.control[7], controls_s.timestamp);
-			dprintf(uart_fd, "$AGARM %d %d %d %d %d %d\r\n", armed_s.armed, armed_s.prearmed, armed_s.ready_to_arm, armed_s.lockdown, armed_s.force_failsafe, armed_s.in_esc_calibration_mode);
+		if (fds_poll[0].revents & POLLIN) {
+			orb_copy(ORB_ID(actuator_controls_0), sub_controls[0], &s_controls);
+			dprintf(uart_fd, "$AGCOD 0 %06.4f %06.4f %06.4f %06.4f %06.4f %06.4f %06.4f %06.4f %llu\r\n", (double) s_controls.control[0], (double) s_controls.control[1], (double) s_controls.control[2], (double) s_controls.control[3], (double) s_controls.control[4], (double) s_controls.control[5], (double) s_controls.control[6], (double) s_controls.control[7], s_controls.timestamp);
 		}
-/*
+
 		bool updated;
 		orb_check(sub_armed, &updated);
 		if (updated) {
-			orb_copy(ORB_ID(actuator_armed), sub_armed, &armed_s);
+			orb_copy(ORB_ID(actuator_armed), sub_armed, &s_armed);
+			dprintf(uart_fd, "$AGARM %d %d %d %d %d %d\r\n", s_armed.armed, s_armed.prearmed, s_armed.ready_to_arm, s_armed.lockdown, s_armed.force_failsafe, s_armed.in_esc_calibration_mode);
 		}
-*/	}
+	}
 
 	thread_running = false;
-	orb_unsubscribe(sub_controls);
+	orb_unsubscribe(sub_controls[0]);
 	orb_unsubscribe(sub_armed);
 
-	dprintf(uart_fd, "$AGSTAT%d\r\n",thread_running);
+	dprintf(uart_fd, "$AGSTAT %d\r\n",thread_running);
 
 	warnx("uartpilot: Exiting");
 	fflush(stdout);
