@@ -181,7 +181,7 @@ set(config_module_list
 	#examples/hwtest
 
 	# RedCat applications
-	redcat/canproxy
+	#redcat/canproxy
 	redcat/uartpilot
 )
 
