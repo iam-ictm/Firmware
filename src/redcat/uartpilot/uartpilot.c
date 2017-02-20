@@ -52,12 +52,17 @@ static void usage(const char *reason)
 	exit(1);
 }
 
-static inline void uartprintf(int fd, const char *format, ...) {
+static void uartprintf(int fd, const char *format, ...) {
 	va_list p_arg;
-	char buf[UARTPILOT_MAX_MSG_LEN];
 
-	vsnprintf(buf, UARTPILOT_MAX_MSG_LEN, format, p_arg);
-	dprintf(fd, buf);
+	char msg[UARTPILOT_MAX_MSG_LEN];
+	vsnprintf(msg, UARTPILOT_MAX_MSG_LEN, format, p_arg);
+
+	uint8_t checksum = 0;
+	char *c = msg;
+	while(*c) checksum ^= *c++;
+
+	dprintf(fd, "$%s*%02x\r\n", msg, checksum);
 }
 
 static inline uint8_t convert(double val) {
