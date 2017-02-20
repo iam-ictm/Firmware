@@ -45,6 +45,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <array>
 #include <fcntl.h>
 #include <systemlib/err.h>
 #include <systemlib/systemlib.h>
@@ -84,6 +85,7 @@ UavcanNode::UavcanNode(uavcan::ICanDriver &can_driver, uavcan::ISystemClock &sys
 	_hardpoint_controller(_node),
 	_time_sync_master(_node),
 	_time_sync_slave(_node),
+	_node_status_monitor(_node),
 	_master_timer(_node),
 	_setget_response(0)
 
@@ -660,6 +662,12 @@ int UavcanNode::init(uavcan::NodeID node_id)
 		return ret;
 	}
 
+	{
+		std::int32_t idle_throttle_when_armed = 0;
+		(void) param_get(param_find("UAVCAN_ESC_IDLT"), &idle_throttle_when_armed);
+		_esc_controller.enable_idle_throttle_when_armed(idle_throttle_when_armed > 0);
+	}
+
 	ret = _hardpoint_controller.init();
 
 	if (ret < 0) {
@@ -800,7 +808,7 @@ int UavcanNode::run()
 	_master_timer.setCallback(TimerCallback(this, &UavcanNode::handle_time_sync));
 	_master_timer.startPeriodic(uavcan::MonotonicDuration::fromMSec(1000));
 
-
+	_node_status_monitor.start();
 
 	const int busevent_fd = ::open(uavcan_stm32::BusEvent::DevName, 0);
 
@@ -1221,10 +1229,13 @@ UavcanNode::print_info()
 		printf("Addr\tV\tA\tTemp\tSetpt\tRPM\tErr\n");
 
 		for (uint8_t i = 0; i < _outputs.noutputs; i++) {
+			const float temp_celsius = (esc.esc[i].esc_temperature > 0) ?
+				(esc.esc[i].esc_temperature - 273.15F) : 0.0F;
+
 			printf("%d\t",    esc.esc[i].esc_address);
 			printf("%3.2f\t", (double)esc.esc[i].esc_voltage);
 			printf("%3.2f\t", (double)esc.esc[i].esc_current);
-			printf("%3.2f\t", (double)esc.esc[i].esc_temperature);
+			printf("%3.2f\t", (double)temp_celsius);
 			printf("%3.2f\t", (double)esc.esc[i].esc_setpoint);
 			printf("%d\t",    esc.esc[i].esc_rpm);
 			printf("%d",      esc.esc[i].esc_errorcount);
@@ -1243,6 +1254,18 @@ UavcanNode::print_info()
 		printf("\n");
 		br = br->getSibling();
 	}
+
+	// Printing all nodes that are online
+	std::printf("Online nodes (Node ID, Health, Mode):\n");
+	_node_status_monitor.forEachNode([](uavcan::NodeID nid, uavcan::NodeStatusMonitor::NodeStatus ns) {
+		static constexpr std::array<const char*, 4> HEALTH = {
+			"OK", "WARN", "ERR", "CRIT"
+		};
+		static constexpr std::array<const char*, 8> MODES = {
+			"OPERAT", "INIT", "MAINT", "SW_UPD", "?", "?", "?", "OFFLN"
+		};
+		std::printf("\t% 3d %-10s %-10s\n", int(nid.get()), HEALTH.at(ns.health), MODES.at(ns.mode));
+	});
 
 	(void)pthread_mutex_unlock(&_node_mutex);
 }

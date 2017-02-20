@@ -48,9 +48,6 @@
 #include <nuttx/compiler.h>
 #include <stdint.h>
 
-__BEGIN_DECLS
-
-/* these headers are not C++ safe */
 #include <stm32.h>
 #include <arch/board/board.h>
 
@@ -108,14 +105,16 @@ __BEGIN_DECLS
 
 #define PX4_I2C_OBDEV_HMC5883	0x1e
 
+#define PX4_I2C_BUS_ONBOARD_HZ      400000
+#define PX4_I2C_BUS_SONAR_HZ        400000
+#define PX4_I2C_BUS_EXPANSION_HZ    400000
 /*
  * Devices on the onboard bus.
  *
  * Note that these are unshifted addresses (not includinf R/W).
  */
 
-/* todo:
- * Cannot tell from the schematic if there is one or 2 MPU6050
+/*
  * The slave address of the MPU-60X0 is b110100X which is 7 bits long.
  * The LSB bit of the 7 bit address is determined by the logic level
  * on pin AD0. This allows two MPU-60X0s to be connected to the same I2C bus.
@@ -123,8 +122,7 @@ __BEGIN_DECLS
  * should be b1101000 (pin AD0 is logic low) and the address of the other
  * should be b1101001 (pin AD0 is logic high).
  */
-#define PX4_I2C_ON_BOARD_MPU6050_ADDRS {0x68,0x69}
-
+#define PX4_I2C_MPU6050_ADDR 0x68
 
 /*
  * ADC channels
@@ -194,17 +192,28 @@ __BEGIN_DECLS
 #define GPIO_TIM3_CH4OUT	GPIO_TIM3_CH4OUT_1
 #define DIRECT_PWM_OUTPUT_CHANNELS	4
 
+#define GPIO_TIM3_CH1IN		GPIO_TIM3_CH1IN_1
+#define GPIO_TIM3_CH2IN		GPIO_TIM3_CH2IN_1
+#define GPIO_TIM3_CH3IN		GPIO_TIM3_CH3IN_1
+#define GPIO_TIM3_CH4IN		GPIO_TIM3_CH4IN_1
+#define DIRECT_INPUT_TIMER_CHANNELS  4
+
 #define BOARD_HAS_LED_PWM
 #define LED_TIM3_CH1OUT  GPIO_TIM3_CH1OUT
 #define LED_TIM3_CH2OUT  GPIO_TIM3_CH2OUT
 #define LED_TIM3_CH3OUT  GPIO_TIM3_CH3OUT
 
+#define BOARD_PWM_DRIVE_ACTIVE_LOW 1
+
 
 /* USB OTG FS
  *
- * PA9  OTG_FS_VBUS VBUS sensing (also connected to the green LED)
+ * PA9  OTG_FS_VBUS VBUS sensing
  */
-#define GPIO_OTGFS_VBUS (GPIO_INPUT|GPIO_FLOAT|GPIO_SPEED_100MHz|GPIO_OPENDRAIN|GPIO_PORTA|GPIO_PIN9)
+#define GPIO_OTGFS_VBUS (GPIO_INPUT|GPIO_FLOAT|GPIO_PORTA|GPIO_PIN9)
+
+#define RC_SERIAL_PORT		"/dev/ttyS5"
+#define INVERT_RC_INPUT(_s)		while(0)
 
 /* High-resolution timer
  */
@@ -234,7 +243,7 @@ __BEGIN_DECLS
 		{GPIO_GPIO5_INPUT,       GPIO_GPIO5_OUTPUT,       0}, }
 
 
-#define MS_PWR_BUTTON_DOWN 750
+#define MS_PWR_BUTTON_DOWN 200
 #define KEY_AD_GPIO    (GPIO_INPUT|GPIO_PULLDOWN|GPIO_EXTI|GPIO_PORTC|GPIO_PIN1)
 #define POWER_ON_GPIO  (GPIO_OUTPUT|GPIO_PUSHPULL|GPIO_SPEED_2MHz|GPIO_OUTPUT_SET|GPIO_PORTA|GPIO_PIN4)
 #define POWER_OFF_GPIO (GPIO_INPUT|GPIO_PULLDOWN|GPIO_PORTA|GPIO_PIN4)
@@ -244,12 +253,15 @@ __BEGIN_DECLS
 #define GPIO_S2  (GPIO_OUTPUT|GPIO_PUSHPULL|GPIO_SPEED_50MHz|GPIO_OUTPUT_CLEAR|GPIO_PORTC|GPIO_PIN13)
 
 #define GPIO_PCON_RADIO (GPIO_OUTPUT|GPIO_PUSHPULL|GPIO_SPEED_2MHz|GPIO_OUTPUT_SET|GPIO_PORTC|GPIO_PIN3)
-#define RF_RADIO_CONTOL(_on_true)	px4_arch_gpiowrite(GPIO_PCON_RADIO, !(_on_true))
+#define RF_RADIO_POWER_CONTROL(_on_true)	px4_arch_gpiowrite(GPIO_PCON_RADIO, !(_on_true))
 
 #define GPIO_TEMP_CONT (GPIO_OUTPUT|GPIO_PUSHPULL|GPIO_SPEED_2MHz|GPIO_OUTPUT_CLEAR|GPIO_PORTB|GPIO_PIN4)
 #define TEMP_CONTROL(_on_true)	px4_arch_gpiowrite(GPIO_TEMP_CONT, (_on_true))
 
 #define  FLASH_BASED_PARAMS
+
+__BEGIN_DECLS
+
 /****************************************************************************************************
  * Public Types
  ****************************************************************************************************/
@@ -308,7 +320,6 @@ extern int board_sdio_initialize(void);
 int nsh_archinitialize(void);
 #endif
 
-
 /************************************************************************************
  * Name: board_pwr_init()
  *
@@ -341,5 +352,16 @@ bool board_pwr_button_down(void);
 
 void board_pwr(bool on_not_off);
 
+/****************************************************************************
+ * Name: board_i2c_initialize
+ *
+ * Description:
+ *   Called to set I2C bus frequncies.
+ *
+ ****************************************************************************/
+
+int board_i2c_initialize(void);
+
 #endif /* __ASSEMBLY__ */
+
 __END_DECLS

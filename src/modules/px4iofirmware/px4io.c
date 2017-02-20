@@ -47,6 +47,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <crc32.h>
+#include <syslog.h>
 
 #include <drivers/drv_pwm_output.h>
 #include <drivers/drv_hrt.h>
@@ -68,6 +69,8 @@ struct sys_state_s 	system_state;
 static struct hrt_call serial_dma_call;
 
 pwm_limit_t pwm_limit;
+
+float dt;
 
 /*
  * a set of debug buffers to allow us to send debug information from ISRs
@@ -347,8 +350,18 @@ user_start(int argc, char *argv[])
 
 	uint64_t last_debug_time = 0;
 	uint64_t last_heartbeat_time = 0;
+	uint64_t last_loop_time = 0;
 
 	for (;;) {
+		dt = (hrt_absolute_time() - last_loop_time) / 1000000.0f;
+		last_loop_time = hrt_absolute_time();
+
+		if (dt < 0.0001f) {
+			dt = 0.0001f;
+
+		} else if (dt > 0.02f) {
+			dt = 0.02f;
+		}
 
 		/* track the rate at which the loop is running */
 		perf_count(loop_perf);
@@ -363,21 +376,36 @@ user_start(int argc, char *argv[])
 		controls_tick();
 		perf_end(controls_perf);
 
-		/*
-		  blink blue LED at 4Hz in normal operation. When in
-		  override blink 4x faster so the user can clearly see
-		  that override is happening. This helps when
-		  pre-flight testing the override system
+		/* some boards such as Pixhawk 2.1 made
+		   the unfortunate choice to combine the blue led channel with
+		   the IMU heater. We need a software hack to fix the hardware hack
+		   by allowing to disable the LED / heater.
 		 */
-		uint32_t heartbeat_period_us = 250 * 1000UL;
+		if (r_page_setup[PX4IO_P_SETUP_THERMAL] == PX4IO_THERMAL_IGNORE) {
+			/*
+			  blink blue LED at 4Hz in normal operation. When in
+			  override blink 4x faster so the user can clearly see
+			  that override is happening. This helps when
+			  pre-flight testing the override system
+			 */
+			uint32_t heartbeat_period_us = 250 * 1000UL;
 
-		if (r_status_flags & PX4IO_P_STATUS_FLAGS_OVERRIDE) {
-			heartbeat_period_us /= 4;
-		}
+			if (r_status_flags & PX4IO_P_STATUS_FLAGS_OVERRIDE) {
+				heartbeat_period_us /= 4;
+			}
 
-		if ((hrt_absolute_time() - last_heartbeat_time) > heartbeat_period_us) {
-			last_heartbeat_time = hrt_absolute_time();
-			heartbeat_blink();
+			if ((hrt_absolute_time() - last_heartbeat_time) > heartbeat_period_us) {
+				last_heartbeat_time = hrt_absolute_time();
+				heartbeat_blink();
+			}
+
+		} else if (r_page_setup[PX4IO_P_SETUP_THERMAL] < PX4IO_THERMAL_FULL) {
+			/* switch resistive heater off */
+			LED_BLUE(false);
+
+		} else {
+			/* switch resistive heater hard on */
+			LED_BLUE(true);
 		}
 
 		ring_blink();

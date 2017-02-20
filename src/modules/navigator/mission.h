@@ -91,6 +91,10 @@ public:
 		MISSION_YAWMODE_BACK_TO_HOME = 3,
 		MISSION_YAWMODE_MAX = 4
 	};
+	
+	bool set_current_offboard_mission_index(unsigned index);
+
+	unsigned find_offboard_land_start();
 
 private:
 	/**
@@ -107,12 +111,6 @@ private:
 	 * Move on to next mission item or switch to loiter
 	 */
 	void advance_mission();
-
-	/**
-	 * Check distance to first waypoint (with lat/lon)
-	 * @return true only if it's not too far from home (< MIS_DIST_1WP)
-	 */
-	bool check_dist_1wp();
 
 	/**
 	 * Set new mission items
@@ -164,6 +162,11 @@ private:
 	 */
 	void altitude_sp_foh_reset();
 
+	/**
+	 * Abort landing
+	 */
+	void do_abort_landing();
+
 	float get_absolute_altitude_for_item(struct mission_item_s &mission_item);
 
 	/**
@@ -209,9 +212,10 @@ private:
 	void set_mission_finished();
 
 	/**
-	 * Check wether a mission is ready to go
+	 * Check whether a mission is ready to go
 	 */
-	bool check_mission_valid();
+	void check_mission_valid(bool force);
+
 
 	/**
 	 * Reset offboard mission
@@ -229,6 +233,7 @@ private:
 	control::BlockParamInt _param_altmode;
 	control::BlockParamInt _param_yawmode;
 	control::BlockParamInt _param_force_vtol;
+	control::BlockParamFloat _param_fw_climbout_diff;
 
 	struct mission_s _onboard_mission;
 	struct mission_s _offboard_mission;
@@ -250,9 +255,7 @@ private:
 	MissionFeasibilityChecker _missionFeasibilityChecker; /**< class that checks if a mission is feasible */
 
 	float _min_current_sp_distance_xy; /**< minimum distance which was achieved to the current waypoint  */
-	float _mission_item_previous_alt; /**< holds the altitude of the previous mission item,
-					    can be replaced by a full copy of the previous mission item if needed */
-	float _on_arrival_yaw; /**< holds the yaw value that should be applied when the current waypoint is reached */
+
 	float _distance_current_previous; /**< distance from previous to current sp in pos_sp_triplet,
 					    only use if current and previous are valid */
 

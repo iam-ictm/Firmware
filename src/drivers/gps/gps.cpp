@@ -103,7 +103,8 @@ public:
 class GPS
 {
 public:
-	GPS(const char *uart_path, bool fake_gps, bool enable_sat_info, int gps_num);
+	GPS(const char *path, gps_driver_mode_t mode, GPSHelper::Interface interface, bool fake_gps, bool enable_sat_info,
+	    int gps_num);
 	virtual ~GPS();
 
 	virtual int			init();
@@ -123,7 +124,9 @@ private:
 	bool				_healthy;					///< flag to signal if the GPS is ok
 	bool				_baudrate_changed;				///< flag to signal that the baudrate with the GPS has changed
 	bool				_mode_changed;					///< flag that the GPS mode has changed
+	bool        			_mode_auto;					///< if true, auto-detect which GPS is attached
 	gps_driver_mode_t		_mode;						///< current mode
+	GPSHelper::Interface  _interface;   						///< interface
 	GPSHelper			*_helper;					///< instance of GPS parser
 	GPS_Sat_Info			*_sat_info;					///< instance of GPS sat info data object
 	struct vehicle_gps_position_s	_report_gps_pos;				///< uORB topic for gps position
@@ -138,9 +141,7 @@ private:
 	bool				_fake_gps;					///< fake gps output
 	int 				_gps_num;					///< number of GPS connected
 
-	static const int _orb_inject_data_fd_count = 4;
-	int _orb_inject_data_fd[_orb_inject_data_fd_count];
-	int _orb_inject_data_next = 0;
+	int _orb_inject_data_fd;
 
 	orb_advert_t _dump_communication_pub;			///< if non-null, dump communication
 	gps_dump_s *_dump_to_device;
@@ -243,11 +244,13 @@ volatile bool is_gps1_advertised = false; ///< for the second gps we want to mak
 }
 
 
-GPS::GPS(const char *uart_path, bool fake_gps, bool enable_sat_info, int gps_num) :
+GPS::GPS(const char *path, gps_driver_mode_t mode, GPSHelper::Interface interface, bool fake_gps,
+	 bool enable_sat_info, int gps_num) :
 	_task_should_exit(false),
 	_healthy(false),
 	_mode_changed(false),
-	_mode(GPS_DRIVER_MODE_UBX),
+	_mode(mode),
+	_interface(interface),
 	_helper(nullptr),
 	_sat_info(nullptr),
 	_report_gps_pos_pub{nullptr},
@@ -259,12 +262,13 @@ GPS::GPS(const char *uart_path, bool fake_gps, bool enable_sat_info, int gps_num
 	_last_rate_rtcm_injection_count(0),
 	_fake_gps(fake_gps),
 	_gps_num(gps_num),
+	_orb_inject_data_fd(-1),
 	_dump_communication_pub(nullptr),
 	_dump_to_device(nullptr),
 	_dump_from_device(nullptr)
 {
 	/* store port name */
-	strncpy(_port, uart_path, sizeof(_port));
+	strncpy(_port, path, sizeof(_port));
 	/* enforce null termination */
 	_port[sizeof(_port) - 1] = '\0';
 
@@ -277,8 +281,8 @@ GPS::GPS(const char *uart_path, bool fake_gps, bool enable_sat_info, int gps_num
 		memset(_p_report_sat_info, 0, sizeof(*_p_report_sat_info));
 	}
 
-	for (int i = 0; i < _orb_inject_data_fd_count; ++i) {
-		_orb_inject_data_fd[i] = -1;
+	if (mode == GPS_DRIVER_MODE_NONE) {
+		_mode_auto = true;
 	}
 }
 
@@ -379,7 +383,7 @@ int GPS::pollOrRead(uint8_t *buf, size_t buf_length, int timeout)
 {
 	handleInjectDataTopic();
 
-#ifndef __PX4_QURT
+#if !defined(__PX4_QURT)
 
 	/* For non QURT, use the usual polling. */
 
@@ -404,9 +408,21 @@ int GPS::pollOrRead(uint8_t *buf, size_t buf_length, int timeout)
 			 * We are here because poll says there is some data, so this
 			 * won't block even on a blocking device. But don't read immediately
 			 * by 1-2 bytes, wait for some more data to save expensive read() calls.
+			 * If we have all requested data available, read it without waiting.
 			 * If more bytes are available, we'll go back to poll() again.
 			 */
+#ifdef __PX4_NUTTX
+			int err = 0, bytesAvailable = 0;
+			err = ioctl(_serial_fd, FIONREAD, (unsigned long)&bytesAvailable);
+
+			if ((err != 0) || (bytesAvailable < buf_length)) {
+				usleep(GPS_WAIT_BEFORE_READ * 1000);
+			}
+
+#else
 			usleep(GPS_WAIT_BEFORE_READ * 1000);
+#endif
+
 			ret = ::read(_serial_fd, buf, buf_length);
 
 		} else {
@@ -426,27 +442,24 @@ int GPS::pollOrRead(uint8_t *buf, size_t buf_length, int timeout)
 
 void GPS::handleInjectDataTopic()
 {
-	if (_orb_inject_data_fd[0] == -1) {
+	if (_orb_inject_data_fd == -1) {
 		return;
 	}
 
 	bool updated = false;
 
 	do {
-		int orb_inject_data_cur_fd = _orb_inject_data_fd[_orb_inject_data_next];
-		orb_check(orb_inject_data_cur_fd, &updated);
+		orb_check(_orb_inject_data_fd, &updated);
 
 		if (updated) {
 			struct gps_inject_data_s msg;
-			orb_copy(ORB_ID(gps_inject_data), orb_inject_data_cur_fd, &msg);
+			orb_copy(ORB_ID(gps_inject_data), _orb_inject_data_fd, &msg);
 
 			/* Write the message to the gps device. Note that the message could be fragmented.
 			 * But as we don't write anywhere else to the device during operation, we don't
 			 * need to assemble the message first.
 			 */
 			injectData(msg.data, msg.len);
-
-			_orb_inject_data_next = (_orb_inject_data_next + 1) % _orb_inject_data_fd_count;
 
 			++_last_rate_rtcm_injection_count;
 		}
@@ -651,16 +664,7 @@ GPS::task_main()
 		px4_task_exit(1);
 	}
 
-#ifndef __PX4_QURT
-	// TODO: this call is not supported on Snapdragon just yet.
-	// However it seems to be nonblocking anyway and working.
-	int flags = fcntl(_serial_fd, F_GETFL, 0);
-	fcntl(_serial_fd, F_SETFL, flags | O_NONBLOCK);
-#endif
-
-	for (int i = 0; i < _orb_inject_data_fd_count; ++i) {
-		_orb_inject_data_fd[i] = orb_subscribe_multi(ORB_ID(gps_inject_data), i);
-	}
+	_orb_inject_data_fd = orb_subscribe(ORB_ID(gps_inject_data));
 
 	initializeCommunicationDump();
 
@@ -687,6 +691,7 @@ GPS::task_main()
 							_report_gps_pos.vel_e_m_s + _report_gps_pos.vel_d_m_s * _report_gps_pos.vel_d_m_s);
 			_report_gps_pos.cog_rad = 0.0f;
 			_report_gps_pos.vel_ned_valid = true;
+			_report_gps_pos.satellites_used = 10;
 
 			/* no time and satellite information simulated */
 
@@ -704,8 +709,12 @@ GPS::task_main()
 			}
 
 			switch (_mode) {
+			case GPS_DRIVER_MODE_NONE:
+				_mode = GPS_DRIVER_MODE_UBX;
+
+			//no break
 			case GPS_DRIVER_MODE_UBX:
-				_helper = new GPSDriverUBX(&GPS::callback, this, &_report_gps_pos, _p_report_sat_info);
+				_helper = new GPSDriverUBX(_interface, &GPS::callback, this, &_report_gps_pos, _p_report_sat_info);
 				break;
 
 			case GPS_DRIVER_MODE_MTK:
@@ -811,33 +820,31 @@ GPS::task_main()
 				}
 			}
 
-			/* select next mode */
-			switch (_mode) {
-			case GPS_DRIVER_MODE_UBX:
-				_mode = GPS_DRIVER_MODE_MTK;
-				break;
+			if (_mode_auto) {
+				switch (_mode) {
+				case GPS_DRIVER_MODE_UBX:
+					_mode = GPS_DRIVER_MODE_MTK;
+					break;
 
-			case GPS_DRIVER_MODE_MTK:
-				_mode = GPS_DRIVER_MODE_ASHTECH;
-				break;
+				case GPS_DRIVER_MODE_MTK:
+					_mode = GPS_DRIVER_MODE_ASHTECH;
+					break;
 
-			case GPS_DRIVER_MODE_ASHTECH:
-				_mode = GPS_DRIVER_MODE_UBX;
-				break;
+				case GPS_DRIVER_MODE_ASHTECH:
+					_mode = GPS_DRIVER_MODE_UBX;
+					break;
 
-			default:
-				break;
+				default:
+					break;
+				}
 			}
-		}
 
+		}
 	}
 
 	PX4_INFO("exiting");
 
-	for (size_t i = 0; i < _orb_inject_data_fd_count; ++i) {
-		orb_unsubscribe(_orb_inject_data_fd[i]);
-		_orb_inject_data_fd[i] = -1;
-	}
+	orb_unsubscribe(_orb_inject_data_fd);
 
 	if (_dump_communication_pub) {
 		orb_unadvertise(_dump_communication_pub);
@@ -954,7 +961,8 @@ namespace gps
 {
 
 
-void	start(const char *uart_path, bool fake_gps, bool enable_sat_info, int gps_num);
+void	start(const char *path, gps_driver_mode_t mode, GPSHelper::Interface interface, bool fake_gps,
+	      bool enable_sat_info, int gps_num);
 void	stop();
 void	test();
 void	reset();
@@ -964,7 +972,8 @@ void	info();
  * Start the driver.
  */
 void
-start(const char *uart_path, bool fake_gps, bool enable_sat_info, int gps_num)
+start(const char *path, gps_driver_mode_t mode, GPSHelper::Interface interface, bool fake_gps, bool enable_sat_info,
+      int gps_num)
 {
 	if (g_dev[gps_num - 1] != nullptr) {
 		PX4_WARN("GPS %i already started", gps_num);
@@ -972,7 +981,7 @@ start(const char *uart_path, bool fake_gps, bool enable_sat_info, int gps_num)
 	}
 
 	/* create the driver */
-	g_dev[gps_num - 1] = new GPS(uart_path, fake_gps, enable_sat_info, gps_num);
+	g_dev[gps_num - 1] = new GPS(path, mode, interface, fake_gps, enable_sat_info, gps_num);
 
 	if (!g_dev[gps_num - 1] || OK != g_dev[gps_num - 1]->init()) {
 		if (g_dev[gps_num - 1] != nullptr) {
@@ -1053,6 +1062,8 @@ gps_main(int argc, char *argv[])
 	const char *device_name2 = nullptr;
 	bool fake_gps = false;
 	bool enable_sat_info = false;
+	GPSHelper::Interface interface = GPSHelper::Interface::UART;
+	gps_driver_mode_t mode = GPS_DRIVER_MODE_NONE;
 
 	if (argc < 2) {
 		goto out;
@@ -1087,6 +1098,43 @@ gps_main(int argc, char *argv[])
 			}
 		}
 
+		/* Detect interface option */
+		for (int i = 2; i < argc; i++) {
+			if (!strcmp(argv[i], "-i")) {
+
+				int interface_arg = i + 1;
+
+				if (interface_arg < argc) {
+					if (!strcmp(argv[interface_arg], "spi")) {
+						interface = GPSHelper::Interface::SPI;
+
+					} else if (!strcmp(argv[interface_arg], "uart")) {
+						interface = GPSHelper::Interface::UART;
+					}
+				}
+			}
+		}
+
+		/* Detect mode/protocol option */
+		for (int i = 2; i < argc; i++) {
+			if (!strcmp(argv[i], "-p")) {
+
+				int mode_arg = i + 1;
+
+				if (mode_arg < argc) {
+					if (!strcmp(argv[mode_arg], "ubx")) {
+						mode = GPS_DRIVER_MODE_UBX;
+
+					} else if (!strcmp(argv[mode_arg], "mtk")) {
+						mode = GPS_DRIVER_MODE_MTK;
+
+					} else if (!strcmp(argv[mode_arg], "ash")) {
+						mode = GPS_DRIVER_MODE_ASHTECH;
+					}
+				}
+			}
+		}
+
 		/* Allow to use a second gps device */
 		for (int i = 2; i < argc; i++) {
 			if (!strcmp(argv[i], "-dualgps")) {
@@ -1099,10 +1147,10 @@ gps_main(int argc, char *argv[])
 			}
 		}
 
-		gps::start(device_name, fake_gps, enable_sat_info, 1);
+		gps::start(device_name, mode, interface, fake_gps, enable_sat_info, 1);
 
 		if (device_name2) {
-			gps::start(device_name2, fake_gps, enable_sat_info, 2);
+			gps::start(device_name2, mode, interface, fake_gps, enable_sat_info, 2);
 		}
 
 	}
@@ -1136,6 +1184,7 @@ gps_main(int argc, char *argv[])
 
 out:
 	PX4_ERR("unrecognized command, try 'start', 'stop', 'test', 'reset' or 'status'");
-	PX4_ERR("[-d " GPS_DEFAULT_UART_PORT "][-f (for enabling fake)][-s (to enable sat info)]");
+	PX4_ERR("[-d " GPS_DEFAULT_UART_PORT
+		"][-f (for enabling fake)][-s (to enable sat info)] [-i {spi|uart}] [-p {ubx|mtk|ash}]");
 	return 1;
 }

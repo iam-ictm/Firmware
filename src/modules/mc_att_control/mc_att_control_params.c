@@ -375,3 +375,46 @@ PARAM_DEFINE_FLOAT(MC_ACRO_Y_MAX, 360.0f);
  * @group Multicopter Attitude Control
  */
 PARAM_DEFINE_FLOAT(MC_RATT_TH, 1.0f);
+
+/**
+ * Threshold for Throttle PID Attenuation (TPA)
+ *
+ * Magnitude of throttle setpoint at which to begin attenuating roll/pitch P gain
+ *
+ * @min 0.0
+ * @max 1.0
+ * @decimal 2
+ * @increment 0.1
+ * @group Multicopter Attitude Control
+ */
+PARAM_DEFINE_FLOAT(MC_TPA_BREAK, 1.0f);
+
+/**
+ * Slope for Throttle PID Attenuation (TPA)
+ *
+ * Rate at which to attenuate roll/pitch P gain
+ * Attenuation factor is 1.0 when throttle magnitude is below the setpoint
+ * Above the setpoint, the attenuation factor is (1 - slope*(abs(throttle)-breakpoint))
+ *
+ * @min 0.0
+ * @max 2.0
+ * @decimal 2
+ * @increment 0.1
+ * @group Multicopter Attitude Control
+ */
+PARAM_DEFINE_FLOAT(MC_TPA_SLOPE, 1.0f);
+
+
+/**
+ * Whether to scale outputs by battery power level
+ *
+ * This compensates for voltage drop of the battery over time by attempting to
+ * normalize performance across the operating range of the battery. The copter
+ * should constantly behave as if it was fully charged with reduced max acceleration
+ * at lower battery percentages. i.e. if hover is at 0.5 throttle at 100% battery,
+ * it will still be 0.5 at 60% battery.
+ *
+ * @boolean
+ * @group Multicopter Attitude Control
+ */
+PARAM_DEFINE_INT32(MC_BAT_SCALE_EN, 0);

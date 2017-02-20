@@ -1,13 +1,15 @@
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/cmake_hexagon")
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PX4_SOURCE_DIR}/cmake/cmake_hexagon")
+include(toolchain/Toolchain-qurt)
 include(fastrpc)
 include(qurt_lib)
+include(qurt_flags)
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-missing-prototypes")
 
 px4_qurt_generate_builtin_commands(
-	OUT ${CMAKE_BINARY_DIR}/apps.h
+	OUT ${PX4_BINARY_DIR}/apps
 	MODULE_LIST ${module_libraries})
 
 FASTRPC_STUB_GEN(px4muorb.idl)
@@ -20,8 +22,8 @@ if ("${QURT_ENABLE_STUBS}" STREQUAL "1")
                 ${FASTRPC_DSP_INCLUDES}
                 )
 	add_executable(px4
-		${CMAKE_BINARY_DIR}/src/firmware/qurt/px4muorb_skel.c
-		${CMAKE_BINARY_DIR}/apps.h)
+		${PX4_BINARY_DIR}/src/firmware/qurt/px4muorb_skel.c
+		${PX4_BINARY_DIR}/apps.cpp)
 
 	target_link_libraries(px4
 		-Wl,--start-group
@@ -40,7 +42,7 @@ else()
 	QURT_LIB(LIB_NAME px4
 		IDL_NAME px4muorb
 		SOURCES
-			${CMAKE_BINARY_DIR}/apps.h
+			${PX4_BINARY_DIR}/apps.cpp
 		LINK_LIBS
 			${module_libraries}
 			${target_libraries}
@@ -54,7 +56,7 @@ else()
 			 BOARD ${BOARD}
 			 FILES ${CMAKE_CURRENT_BINARY_DIR}/libpx4.so
 				 ${CMAKE_CURRENT_BINARY_DIR}/libpx4muorb_skel.so
-				 ${CMAKE_SOURCE_DIR}/posix-configs/eagle/flight/px4.config
+				 ${PX4_SOURCE_DIR}/posix-configs/eagle/flight/px4.config
 			 DEPENDS px4 px4muorb_skel
 			 DEST /usr/share/data/adsp)
 endif()

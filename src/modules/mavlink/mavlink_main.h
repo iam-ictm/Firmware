@@ -70,6 +70,7 @@
 #include "mavlink_ftp.h"
 #include "mavlink_log_handler.h"
 #include "mavlink_shell.h"
+#include "mavlink_ulog.h"
 
 enum Protocol {
 	SERIAL = 0,
@@ -172,20 +173,26 @@ public:
 
 	static const char *mavlink_mode_str(enum MAVLINK_MODE mode) {
 		switch (mode) {
-			case MAVLINK_MODE_NORMAL:
+		case MAVLINK_MODE_NORMAL:
 				return "Normal";
-			case MAVLINK_MODE_CUSTOM:
-				return "Custom";
-			case MAVLINK_MODE_ONBOARD:
-				return "Onboard";
-			case MAVLINK_MODE_OSD:
-				return "OSD";
-			case MAVLINK_MODE_MAGIC:
-				return "Magic";
-			case MAVLINK_MODE_CONFIG:
-				return "Config";
-			default:
-				return "Unknown";
+
+		case MAVLINK_MODE_CUSTOM:
+			return "Custom";
+
+		case MAVLINK_MODE_ONBOARD:
+			return "Onboard";
+
+		case MAVLINK_MODE_OSD:
+			return "OSD";
+
+		case MAVLINK_MODE_MAGIC:
+			return "Magic";
+
+		case MAVLINK_MODE_CONFIG:
+			return "Config";
+
+		default:
+			return "Unknown";
 		}
 	}
 
@@ -230,7 +237,8 @@ public:
 	 */
 	void			mavlink_pm_message_handler(const mavlink_channel_t chan, const mavlink_message_t *msg);
 
-	void			get_mavlink_mode_and_state(struct vehicle_status_s *status, struct position_setpoint_triplet_s *pos_sp_triplet, uint8_t *mavlink_state, uint8_t *mavlink_base_mode, uint32_t *mavlink_custom_mode);
+	void			get_mavlink_mode_and_state(struct vehicle_status_s *status, struct position_setpoint_triplet_s *pos_sp_triplet,
+			uint8_t *mavlink_state, uint8_t *mavlink_base_mode, uint32_t *mavlink_custom_mode);
 
 	/**
 	 * Enable / disable Hardware in the Loop simulation mode.
@@ -264,6 +272,12 @@ public:
 	 */
 	bool			get_manual_input_mode_generation() { return _generate_rc; }
 
+
+	/**
+	 * This is the beginning of a MAVLINK_START_UART_SEND/MAVLINK_END_UART_SEND transaction
+	 */
+	void 			begin_send();
+
 	/**
 	 * Send bytes out on the link.
 	 *
@@ -276,7 +290,7 @@ public:
 	 *
 	 * @return the number of bytes sent or -1 in case of error
 	 */
-	int			send_packet();
+	int             send_packet();
 
 	/**
 	 * Resend message as is, don't change sequence number and CRC.
@@ -285,7 +299,7 @@ public:
 
 	void			handle_message(const mavlink_message_t *msg);
 
-	MavlinkOrbSubscription *add_orb_subscription(const orb_id_t topic, int instance=0);
+	MavlinkOrbSubscription *add_orb_subscription(const orb_id_t topic, int instance = 0);
 
 	int			get_instance_id();
 
@@ -339,7 +353,7 @@ public:
 	void			send_statustext(unsigned char severity, const char *string);
 	void 			send_autopilot_capabilites();
 
-	MavlinkStream *		get_streams() const { return _streams; }
+	MavlinkStream 		*get_streams() const { return _streams; }
 
 	float			get_rate_mult();
 
@@ -380,7 +394,7 @@ public:
 	/**
 	 * Get the receive status of this MAVLink link
 	 */
-	struct telemetry_status_s&	get_rx_status() { return _rstatus; }
+	struct telemetry_status_s	&get_rx_status() { return _rstatus; }
 
 	ringbuffer::RingBuffer	*get_logbuffer() { return &_logbuffer; }
 
@@ -392,9 +406,9 @@ public:
 
 	unsigned short		get_remote_port() { return _remote_port; }
 
-	int 			get_socket_fd () { return _socket_fd; };
+	int 			get_socket_fd() { return _socket_fd; };
 #ifdef __PX4_POSIX
-	struct sockaddr_in *	get_client_source_address() { return &_src_addr; }
+	struct sockaddr_in 	*get_client_source_address() { return &_src_addr; }
 
 	void			set_client_source_initialized() { _src_addr_initialized = true; }
 
@@ -419,13 +433,24 @@ public:
 	void			set_logging_enabled(bool logging) { _logging_enabled = logging; }
 
 	int			get_data_rate() { return _datarate; }
-	void			set_data_rate(int rate) { if (rate > 0) _datarate = rate; }
+	void			set_data_rate(int rate) { if (rate > 0) { _datarate = rate; } }
 
 	/** get the Mavlink shell. Create a new one if there isn't one. It is *always* created via MavlinkReceiver thread.
 	 *  Returns nullptr if shell cannot be created */
 	MavlinkShell		*get_shell();
 	/** close the Mavlink shell if it is open */
 	void			close_shell();
+
+	/** get ulog streaming if active, nullptr otherwise */
+	MavlinkULog		*get_ulog_streaming() { return _mavlink_ulog; }
+	void			try_start_ulog_streaming(uint8_t target_system, uint8_t target_component) {
+		if (_mavlink_ulog) { return; }
+
+		_mavlink_ulog = MavlinkULog::try_start(_datarate, 0.7f, target_system, target_component);
+	}
+	void			request_stop_ulog_streaming() {
+		if (_mavlink_ulog) { _mavlink_ulog_stop_requested = true; }
+	}
 
 protected:
 	Mavlink			*next;
@@ -459,6 +484,8 @@ private:
 	MavlinkFTP			*_mavlink_ftp;
 	MavlinkLogHandler		*_mavlink_log_handler;
 	MavlinkShell			*_mavlink_shell;
+	MavlinkULog			*_mavlink_ulog;
+	volatile bool			_mavlink_ulog_stop_requested;
 
 	MAVLINK_MODE 		_mode;
 
@@ -499,6 +526,7 @@ private:
 	uint64_t		_last_write_success_time;
 	uint64_t		_last_write_try_time;
 	uint64_t		_mavlink_start_time;
+	int32_t			_protocol_version_switch;
 	int32_t			_protocol_version;
 
 	unsigned		_bytes_tx;
@@ -561,7 +589,7 @@ private:
 	void			mavlink_update_system();
 
 #ifndef __PX4_QURT
-	int			mavlink_open_uart(int baudrate, const char *uart_name, struct termios *uart_config_original);
+	int			mavlink_open_uart(int baudrate, const char *uart_name);
 #endif
 
 	static unsigned int	interval_from_rate(float rate);
@@ -608,6 +636,6 @@ private:
 	int		task_main(int argc, char *argv[]);
 
 	/* do not allow copying this class */
-	Mavlink(const Mavlink&);
-	Mavlink operator=(const Mavlink&);
+	Mavlink(const Mavlink &);
+	Mavlink operator=(const Mavlink &);
 };

@@ -115,13 +115,13 @@ public:
 	/**
 	 * Publish the geofence result
 	 */
-	void publish_geofence_result();
+	void		publish_geofence_result();
 
 	/**
 	 * Publish the attitude sp, only to be used in very special modes when position control is deactivated
 	 * Example: mode that is triggered on gps failure
 	 */
-	void publish_att_sp();
+	void		publish_att_sp();
 
 	/**
 	 * Setters
@@ -157,7 +157,7 @@ public:
 	/**
 	 * Returns the default acceptance radius defined by the parameter
 	 */
-	float get_default_acceptance_radius();
+	float		get_default_acceptance_radius();
 
 	/**
 	 * Get the acceptance radius
@@ -184,7 +184,6 @@ public:
 	 * Set the cruising speed
 	 */
 	void		set_cruising_speed(float speed=-1.0f) { _mission_cruising_speed = speed; }
-
 
 	/**
 	 * Get the target throttle
@@ -213,6 +212,10 @@ public:
 	void 		set_mission_failure(const char *reason);
 
 	bool		is_planned_mission() { return _navigation_mode == &_mission; }
+
+	bool		abort_landing();
+
+	static float		get_time_inside(struct mission_item_s& item) { return (item.nav_cmd == NAV_CMD_TAKEOFF) ? 0.0f : item.time_inside; }
 
 private:
 

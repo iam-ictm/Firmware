@@ -99,6 +99,7 @@
 #include <uORB/topics/differential_pressure.h>
 #include <uORB/topics/airspeed.h>
 #include <uORB/topics/rc_parameter_map.h>
+#include <uORB/topics/sensor_preflight.h>
 
 #include <DevMgr.hpp>
 
@@ -212,7 +213,7 @@ private:
 		SensorData()
 			: last_best_vote(0),
 			  subscription_count(0),
-			  voter(SENSOR_COUNT_MAX),
+			  voter(1),
 			  last_failover_count(0)
 		{
 			for (unsigned i = 0; i < SENSOR_COUNT_MAX; i++) {
@@ -249,6 +250,7 @@ private:
 	orb_advert_t	_airspeed_pub;			/**< airspeed */
 	orb_advert_t	_diff_pres_pub;			/**< differential_pressure */
 	orb_advert_t	_mavlink_log_pub;
+	orb_advert_t	_sensor_preflight;		/**< sensor preflight topic */
 
 	perf_counter_t	_loop_perf;			/**< loop performance counter */
 
@@ -272,6 +274,9 @@ private:
 	uint64_t _last_accel_timestamp[SENSOR_COUNT_MAX]; /**< latest full timestamp */
 	uint64_t _last_mag_timestamp[SENSOR_COUNT_MAX]; /**< latest full timestamp */
 	uint64_t _last_baro_timestamp[SENSOR_COUNT_MAX]; /**< latest full timestamp */
+
+	float _accel_diff[3][2];	/**< filtered accel differences between IMU units (m/s/s) */
+	float _gyro_diff[3][2];		/**< filtered gyro differences between IMU uinits (rad/s) */
 
 	hrt_abstime _vibration_warning_timestamp;
 	bool _vibration_warning;
@@ -306,6 +311,7 @@ private:
 		int rc_map_offboard_sw;
 		int rc_map_kill_sw;
 		int rc_map_trans_sw;
+		int rc_map_gear_sw;
 
 		int rc_map_flaps;
 
@@ -330,6 +336,7 @@ private:
 		float rc_offboard_th;
 		float rc_killswitch_th;
 		float rc_trans_th;
+		float rc_gear_th;
 		bool rc_assist_inv;
 		bool rc_auto_inv;
 		bool rc_rattitude_inv;
@@ -340,6 +347,7 @@ private:
 		bool rc_offboard_inv;
 		bool rc_killswitch_inv;
 		bool rc_trans_inv;
+		bool rc_gear_inv;
 
 		float battery_voltage_scaling;
 		float battery_current_scaling;
@@ -379,6 +387,7 @@ private:
 		param_t rc_map_offboard_sw;
 		param_t rc_map_kill_sw;
 		param_t rc_map_trans_sw;
+		param_t rc_map_gear_sw;
 
 		param_t rc_map_flaps;
 
@@ -407,6 +416,7 @@ private:
 		param_t rc_offboard_th;
 		param_t rc_killswitch_th;
 		param_t rc_trans_th;
+		param_t rc_gear_th;
 
 		param_t battery_voltage_scaling;
 		param_t battery_current_scaling;
@@ -544,6 +554,16 @@ private:
 	bool check_vibration();
 
 	/**
+	 * Calculates the magnitude in m/s/s of the largest difference between the primary and any other accel sensor
+	 */
+	void calc_accel_inconsistency(sensor_preflight_s &preflt);
+
+	/**
+	 * Calculates the magnitude in rad/s of the largest difference between the primary and any other gyro sensor
+	 */
+	void calc_gyro_inconsistency(struct sensor_preflight_s &preflt);
+
+	/**
 	 * Shim for calling task_main from task_create.
 	 */
 	static void	task_main_trampoline(int argc, char *argv[]);
@@ -584,6 +604,7 @@ Sensors::Sensors() :
 	_airspeed_pub(nullptr),
 	_diff_pres_pub(nullptr),
 	_mavlink_log_pub(nullptr),
+	_sensor_preflight(nullptr),
 
 	/* performance counters */
 	_loop_perf(perf_alloc(PC_ELAPSED, "sensors")),
@@ -598,6 +619,7 @@ Sensors::Sensors() :
 	_vibration_warning_timestamp(0),
 	_vibration_warning(false)
 {
+	_baro.voter.set_timeout(300000);
 	_mag.voter.set_timeout(300000);
 
 	memset(&_rc, 0, sizeof(_rc));
@@ -608,6 +630,8 @@ Sensors::Sensors() :
 	memset(&_last_accel_timestamp, 0, sizeof(_last_accel_timestamp));
 	memset(&_last_mag_timestamp, 0, sizeof(_last_mag_timestamp));
 	memset(&_last_baro_timestamp, 0, sizeof(_last_baro_timestamp));
+	memset(&_accel_diff, 0, sizeof(_accel_diff));
+	memset(&_gyro_diff, 0, sizeof(_gyro_diff));
 
 	/* basic r/c parameters */
 	for (unsigned i = 0; i < _rc_max_chan_count; i++) {
@@ -656,6 +680,7 @@ Sensors::Sensors() :
 	_parameter_handles.rc_map_offboard_sw = param_find("RC_MAP_OFFB_SW");
 	_parameter_handles.rc_map_kill_sw = param_find("RC_MAP_KILL_SW");
 	_parameter_handles.rc_map_trans_sw = param_find("RC_MAP_TRANS_SW");
+	_parameter_handles.rc_map_gear_sw = param_find("RC_MAP_GEAR_SW");
 
 	_parameter_handles.rc_map_aux1 = param_find("RC_MAP_AUX1");
 	_parameter_handles.rc_map_aux2 = param_find("RC_MAP_AUX2");
@@ -685,6 +710,7 @@ Sensors::Sensors() :
 	_parameter_handles.rc_offboard_th = param_find("RC_OFFB_TH");
 	_parameter_handles.rc_killswitch_th = param_find("RC_KILLSWITCH_TH");
 	_parameter_handles.rc_trans_th = param_find("RC_TRANS_TH");
+	_parameter_handles.rc_gear_th = param_find("RC_GEAR_TH");
 
 
 	/* Differential pressure offset */
@@ -722,9 +748,53 @@ Sensors::Sensors() :
 	(void)param_find("CAL_MAG1_ROT");
 	(void)param_find("CAL_MAG2_ROT");
 	(void)param_find("CAL_MAG_SIDES");
+
+	(void)param_find("CAL_MAG1_XOFF");
+	(void)param_find("CAL_MAG1_XSCALE");
+	(void)param_find("CAL_MAG1_YOFF");
+	(void)param_find("CAL_MAG1_YSCALE");
+	(void)param_find("CAL_MAG1_ZOFF");
+	(void)param_find("CAL_MAG1_ZSCALE");
+
+	(void)param_find("CAL_MAG2_XOFF");
+	(void)param_find("CAL_MAG2_XSCALE");
+	(void)param_find("CAL_MAG2_YOFF");
+	(void)param_find("CAL_MAG2_YSCALE");
+	(void)param_find("CAL_MAG2_ZOFF");
+	(void)param_find("CAL_MAG2_ZSCALE");
+
+	(void)param_find("CAL_GYRO1_XOFF");
+	(void)param_find("CAL_GYRO1_XSCALE");
+	(void)param_find("CAL_GYRO1_YOFF");
+	(void)param_find("CAL_GYRO1_YSCALE");
+	(void)param_find("CAL_GYRO1_ZOFF");
+	(void)param_find("CAL_GYRO1_ZSCALE");
+
+	(void)param_find("CAL_GYRO2_XOFF");
+	(void)param_find("CAL_GYRO2_XSCALE");
+	(void)param_find("CAL_GYRO2_YOFF");
+	(void)param_find("CAL_GYRO2_YSCALE");
+	(void)param_find("CAL_GYRO2_ZOFF");
+	(void)param_find("CAL_GYRO2_ZSCALE");
+
+	(void)param_find("CAL_ACC1_XOFF");
+	(void)param_find("CAL_ACC1_XSCALE");
+	(void)param_find("CAL_ACC1_YOFF");
+	(void)param_find("CAL_ACC1_YSCALE");
+	(void)param_find("CAL_ACC1_ZOFF");
+	(void)param_find("CAL_ACC1_ZSCALE");
+
+	(void)param_find("CAL_ACC2_XOFF");
+	(void)param_find("CAL_ACC2_XSCALE");
+	(void)param_find("CAL_ACC2_YOFF");
+	(void)param_find("CAL_ACC2_YSCALE");
+	(void)param_find("CAL_ACC2_ZOFF");
+	(void)param_find("CAL_ACC2_ZSCALE");
+
 	(void)param_find("SYS_PARAM_VER");
 	(void)param_find("SYS_AUTOSTART");
 	(void)param_find("SYS_AUTOCONFIG");
+	(void)param_find("PWM_RATE");
 	(void)param_find("PWM_MIN");
 	(void)param_find("PWM_MAX");
 	(void)param_find("PWM_DISARMED");
@@ -862,6 +932,10 @@ Sensors::parameters_update()
 		warnx("%s", paramerr);
 	}
 
+	if (param_get(_parameter_handles.rc_map_gear_sw, &(_parameters.rc_map_gear_sw)) != OK) {
+		warnx("%s", paramerr);
+	}
+
 	if (param_get(_parameter_handles.rc_map_flaps, &(_parameters.rc_map_flaps)) != OK) {
 		PX4_WARN("%s", paramerr);
 	}
@@ -909,6 +983,9 @@ Sensors::parameters_update()
 	param_get(_parameter_handles.rc_trans_th, &(_parameters.rc_trans_th));
 	_parameters.rc_trans_inv = (_parameters.rc_trans_th < 0);
 	_parameters.rc_trans_th = fabs(_parameters.rc_trans_th);
+	param_get(_parameter_handles.rc_gear_th, &(_parameters.rc_gear_th));
+	_parameters.rc_gear_inv = (_parameters.rc_gear_th < 0);
+	_parameters.rc_gear_th = fabs(_parameters.rc_gear_th);
 
 	/* update RC function mappings */
 	_rc.function[rc_channels_s::RC_CHANNELS_FUNCTION_THROTTLE] = _parameters.rc_map_throttle - 1;
@@ -925,6 +1002,7 @@ Sensors::parameters_update()
 	_rc.function[rc_channels_s::RC_CHANNELS_FUNCTION_OFFBOARD] = _parameters.rc_map_offboard_sw - 1;
 	_rc.function[rc_channels_s::RC_CHANNELS_FUNCTION_KILLSWITCH] = _parameters.rc_map_kill_sw - 1;
 	_rc.function[rc_channels_s::RC_CHANNELS_FUNCTION_TRANSITION] = _parameters.rc_map_trans_sw - 1;
+	_rc.function[rc_channels_s::RC_CHANNELS_FUNCTION_GEAR] = _parameters.rc_map_gear_sw - 1;
 
 	_rc.function[rc_channels_s::RC_CHANNELS_FUNCTION_FLAPS] = _parameters.rc_map_flaps - 1;
 
@@ -983,6 +1061,8 @@ Sensors::parameters_update()
 		_parameters.battery_v_div = 5.7013919372f;
 #elif defined (CONFIG_ARCH_BOARD_SITL)
 		_parameters.battery_v_div = 10.177939394f;
+#elif defined (CONFIG_ARCH_BOARD_TAP_V1)
+		_parameters.battery_v_div = 9.0f;
 #else
 		/* ensure a missing default trips a low voltage lockdown */
 		_parameters.battery_v_div = 0.0f;
@@ -1330,6 +1410,7 @@ Sensors::diff_pres_poll(struct sensor_combined_s &raw)
 						   _last_best_baro_pressure * 1e2f, air_temperature_celsius));
 
 		_airspeed.air_temperature_celsius = air_temperature_celsius;
+		_airspeed.differential_pressure_filtered_pa = _diff_pres.differential_pressure_filtered_pa;
 
 		/* announce the airspeed if needed, just publish else */
 		if (_airspeed_pub != nullptr) {
@@ -1353,19 +1434,18 @@ Sensors::vehicle_control_mode_poll()
 	if (vcontrol_mode_updated) {
 
 		orb_copy(ORB_ID(vehicle_control_mode), _vcontrol_mode_sub, &vcontrol_mode);
+		_armed = vcontrol_mode.flag_armed;
 
 		/* switching from non-HIL to HIL mode */
 		if (vcontrol_mode.flag_system_hil_enabled && !_hil_enabled) {
 			_hil_enabled = true;
 			_publishing = false;
-			_armed = vcontrol_mode.flag_armed;
 
 			/* switching from HIL to non-HIL mode */
 
 		} else if (!_publishing && !_hil_enabled) {
 			_hil_enabled = false;
 			_publishing = true;
-			_armed = vcontrol_mode.flag_armed;
 		}
 	}
 }
@@ -2130,6 +2210,8 @@ Sensors::rc_poll()
 					     _parameters.rc_killswitch_th, _parameters.rc_killswitch_inv);
 			manual.transition_switch = get_rc_sw2pos_position(rc_channels_s::RC_CHANNELS_FUNCTION_TRANSITION,
 						   _parameters.rc_trans_th, _parameters.rc_trans_inv);
+			manual.gear_switch = get_rc_sw2pos_position(rc_channels_s::RC_CHANNELS_FUNCTION_GEAR,
+					     _parameters.rc_gear_th, _parameters.rc_gear_inv);
 
 			/* publish manual_control_setpoint topic */
 			if (_manual_control_pub != nullptr) {
@@ -2184,14 +2266,14 @@ Sensors::check_failover(SensorData &sensor, const char *sensor_name)
 			PX4_INFO("%s sensor switch from #%i", sensor_name, sensor.voter.failover_index());
 
 		} else {
-			mavlink_and_console_log_emergency(&_mavlink_log_pub, "%s #%i failover :%s%s%s%s%s!",
-							  sensor_name,
-							  sensor.voter.failover_index(),
-							  ((flags & DataValidator::ERROR_FLAG_NO_DATA) ? " No data" : ""),
-							  ((flags & DataValidator::ERROR_FLAG_STALE_DATA) ? " Stale data" : ""),
-							  ((flags & DataValidator::ERROR_FLAG_TIMEOUT) ? " Data timeout" : ""),
-							  ((flags & DataValidator::ERROR_FLAG_HIGH_ERRCOUNT) ? " High error count" : ""),
-							  ((flags & DataValidator::ERROR_FLAG_HIGH_ERRDENSITY) ? " High error density" : ""));
+			mavlink_log_emergency(&_mavlink_log_pub, "%s #%i failover :%s%s%s%s%s!",
+					      sensor_name,
+					      sensor.voter.failover_index(),
+					      ((flags & DataValidator::ERROR_FLAG_NO_DATA) ? " No data" : ""),
+					      ((flags & DataValidator::ERROR_FLAG_STALE_DATA) ? " Stale data" : ""),
+					      ((flags & DataValidator::ERROR_FLAG_TIMEOUT) ? " Data timeout" : ""),
+					      ((flags & DataValidator::ERROR_FLAG_HIGH_ERRCOUNT) ? " High error count" : ""),
+					      ((flags & DataValidator::ERROR_FLAG_HIGH_ERRDENSITY) ? " High error density" : ""));
 		}
 
 		sensor.last_failover_count = sensor.voter.failover_count();
@@ -2216,10 +2298,10 @@ Sensors::check_vibration()
 
 		} else if (hrt_elapsed_time(&_vibration_warning_timestamp) > 10000 * 1000) {
 			_vibration_warning = true;
-			mavlink_and_console_log_critical(&_mavlink_log_pub, "HIGH VIBRATION! g: %d a: %d m: %d",
-							 (int)(100 * _gyro.voter.get_vibration_factor(cur_time)),
-							 (int)(100 * _accel.voter.get_vibration_factor(cur_time)),
-							 (int)(100 * _mag.voter.get_vibration_factor(cur_time)));
+			mavlink_log_critical(&_mavlink_log_pub, "HIGH VIBRATION! g: %d a: %d m: %d",
+					     (int)(100 * _gyro.voter.get_vibration_factor(cur_time)),
+					     (int)(100 * _accel.voter.get_vibration_factor(cur_time)),
+					     (int)(100 * _mag.voter.get_vibration_factor(cur_time)));
 			ret = true;
 		}
 
@@ -2228,6 +2310,108 @@ Sensors::check_vibration()
 	}
 
 	return ret;
+}
+
+void
+Sensors::calc_accel_inconsistency(sensor_preflight_s &preflt)
+{
+	// skip check if less than 2 sensors
+	if (_accel.subscription_count < 2) {
+		preflt.accel_inconsistency_m_s_s = 0.0f;
+		return;
+
+	}
+
+	float accel_diff_sum_max_sq = 0.0f; // the maximum sum of axis differences squared
+	uint8_t check_index = 0; // the number of sensors the primary has been checked against
+
+	// Check each sensor against the primary
+	for (unsigned sensor_index = 0; sensor_index < _accel.subscription_count; sensor_index++) {
+
+		// check that the sensor we are checking against is not the same as the primary
+		if (sensor_index != _accel.last_best_vote) {
+
+			float accel_diff_sum_sq = 0.0f; // sum of differences squared for a single sensor comparison agains the primary
+
+			// calculate accel_diff_sum_sq for the specified sensor against the primary
+			for (unsigned axis_index = 0; axis_index < 3; axis_index++) {
+				_accel_diff[axis_index][check_index] = 0.95f * _accel_diff[axis_index][check_index] + 0.05f *
+								       (_last_sensor_data[_accel.last_best_vote].accelerometer_m_s2[axis_index] -
+									_last_sensor_data[sensor_index].accelerometer_m_s2[axis_index]);
+				accel_diff_sum_sq += _accel_diff[axis_index][check_index] * _accel_diff[axis_index][check_index];
+
+			}
+
+			// capture the largest sum value
+			if (accel_diff_sum_sq > accel_diff_sum_max_sq) {
+				accel_diff_sum_max_sq = accel_diff_sum_sq;
+
+			}
+
+			// increment the check index
+			check_index++;
+		}
+
+		// check to see if the maximum number of checks has been reached and break
+		if (check_index >= 2) {
+			break;
+
+		}
+	}
+
+	// get the vector length of the largest difference and write to the combined sensor struct
+	preflt.accel_inconsistency_m_s_s = sqrtf(accel_diff_sum_max_sq);
+}
+
+void Sensors::calc_gyro_inconsistency(sensor_preflight_s &preflt)
+{
+	// skip check if less than 2 sensors
+	if (_gyro.subscription_count < 2) {
+		preflt.gyro_inconsistency_rad_s = 0.0f;
+		return;
+
+	}
+
+	float gyro_diff_sum_max_sq = 0.0f; // the maximum sum of axis differences squared
+	uint8_t check_index = 0; // the number of sensors the primary has been checked against
+
+
+	// Check each sensor against the primary
+	for (unsigned sensor_index = 0; sensor_index < _gyro.subscription_count; sensor_index++) {
+
+		// check that the sensor we are checking against is not the same as the primary
+		if (sensor_index != _gyro.last_best_vote) {
+
+			float gyro_diff_sum_sq = 0.0f; // sum of differences squared for a single sensor comparison against the primary
+
+			// calculate gyro_diff_sum_sq for the specified sensor against the primary
+			for (unsigned axis_index = 0; axis_index < 3; axis_index++) {
+				_gyro_diff[axis_index][check_index] = 0.95f * _gyro_diff[axis_index][check_index] + 0.05f *
+								      (_last_sensor_data[_gyro.last_best_vote].gyro_rad[axis_index] -
+								       _last_sensor_data[sensor_index].gyro_rad[axis_index]);
+				gyro_diff_sum_sq += _gyro_diff[axis_index][check_index] * _gyro_diff[axis_index][check_index];
+
+			}
+
+			// capture the largest sum value
+			if (gyro_diff_sum_sq > gyro_diff_sum_max_sq) {
+				gyro_diff_sum_max_sq = gyro_diff_sum_sq;
+
+			}
+
+			// increment the check index
+			check_index++;
+		}
+
+		// check to see if the maximum number of checks has been reached and break
+		if (check_index >= 2) {
+			break;
+
+		}
+	}
+
+	// get the vector length of the largest difference and write to the combined sensor struct
+	preflt.gyro_inconsistency_rad_s = sqrtf(gyro_diff_sum_max_sq);
 }
 
 void
@@ -2248,6 +2432,13 @@ Sensors::init_sensor_class(const struct orb_metadata *meta, SensorData &sensor_d
 	for (unsigned i = 0; i < group_count; i++) {
 		if (sensor_data.subscription[i] < 0) {
 			sensor_data.subscription[i] = orb_subscribe_multi(meta, i);
+
+			if (i > 0) {
+				/* the first always exists, but for each further sensor, add a new validator */
+				if (!sensor_data.voter.add_new_validator()) {
+					PX4_ERR("failed to add validator for sensor %s %i", meta->o_name, i);
+				}
+			}
 		}
 
 		int32_t priority;
@@ -2284,6 +2475,8 @@ Sensors::task_main()
 	raw.magnetometer_timestamp_relative = sensor_combined_s::RELATIVE_TIMESTAMP_INVALID;
 
 	raw.baro_timestamp_relative = sensor_combined_s::RELATIVE_TIMESTAMP_INVALID;
+
+	struct sensor_preflight_s preflt = {};
 
 	/*
 	 * do subscriptions
@@ -2335,6 +2528,13 @@ Sensors::task_main()
 	/* advertise the sensor_combined topic and make the initial publication */
 	_sensor_pub = orb_advertise(ORB_ID(sensor_combined), &raw);
 
+	/* advertise the sensor_preflight topic and make the initial publication */
+	preflt.accel_inconsistency_m_s_s = 0.0f;
+
+	preflt.gyro_inconsistency_rad_s = 0.0f;
+
+	_sensor_preflight = orb_advertise(ORB_ID(sensor_preflight), &preflt);
+
 	/* wakeup source */
 	px4_pollfd_struct_t poll_fds = {};
 
@@ -2381,7 +2581,6 @@ Sensors::task_main()
 		mag_poll(raw);
 		baro_poll(raw);
 
-
 		/* check battery voltage */
 		adc_poll(raw);
 
@@ -2408,6 +2607,16 @@ Sensors::task_main()
 			check_failover(_gyro, "Gyro");
 			check_failover(_mag, "Mag");
 			check_failover(_baro, "Baro");
+
+			/* If the the vehicle is disarmed calculate the length of the maximum difference between
+			 * IMU units as a consistency metric and publish to the sensor preflight topic
+			*/
+			if (!_armed) {
+				calc_accel_inconsistency(preflt);
+				calc_gyro_inconsistency(preflt);
+				orb_publish(ORB_ID(sensor_preflight), _sensor_preflight, &preflt);
+
+			}
 
 			//check_vibration(); //disabled for now, as it does not seem to be reliable
 		}
@@ -2475,7 +2684,7 @@ Sensors::start()
 	_sensors_task = px4_task_spawn_cmd("sensors",
 					   SCHED_DEFAULT,
 					   SCHED_PRIORITY_MAX - 5,
-					   1500,
+					   1700,
 					   (px4_main_t)&Sensors::task_main_trampoline,
 					   nullptr);
 
