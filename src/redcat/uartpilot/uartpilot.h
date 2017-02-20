@@ -40,7 +40,9 @@
  * Definitions
  ****************************************************************************/
 
-//#define UARTPILOT_DEBUG 1
+#ifndef UARTPILOT_DEBUG
+#  define UARTPILOT_DEBUG 1
+#endif
 
 #ifndef UARTPILOT_DEVICE
 #  define UARTPILOT_DEVICE "/dev/ttyS6"
@@ -52,6 +54,14 @@
 
 #ifndef UARTPILOT_POLL_MILIS
 #  define UARTPILOT_POLL_MILIS 0	// Default 10
+#endif
+
+#ifndef UARTPILOT_MAX_MSG_LEN
+#  define UARTPILOT_MAX_MSG_LEN 80
+#endif
+
+#ifndef UARTPILOT_EXTENDED_MSGS
+#  define UARTPILOT_EXTENDED_MSGS 1
 #endif
 
 /****************************************************************************

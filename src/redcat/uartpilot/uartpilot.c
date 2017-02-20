@@ -33,31 +33,10 @@
  *
  ****************************************************************************/
 
-#include <px4_config.h>
 #include <px4_posix.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdbool.h>
-#include <fcntl.h>
-#include <float.h>
-#include <nuttx/sched.h>
-#include <sys/prctl.h>
-#include <drivers/drv_hrt.h>
 #include <termios.h>
-#include <errno.h>
-#include <limits.h>
-#include <math.h>
-#include <uORB/uORB.h>
 #include <uORB/topics/actuator_controls.h>
 #include <uORB/topics/actuator_armed.h>
-#include <drivers/drv_accel.h>
-#include <drivers/drv_gyro.h>
-#include <systemlib/perf_counter.h>
-#include <systemlib/systemlib.h>
-#include <systemlib/err.h>
-#include <poll.h>
 
 #include "uartpilot.h"
 
@@ -65,28 +44,35 @@ static bool thread_should_exit = false;
 static bool thread_running = false;
 static int daemon_task_handle;
 
-
 static void usage(const char *reason)
 {
-	if (reason) {
-		fprintf(stderr, "%s\n", reason);
-	}
-
-	fprintf(stderr, "Usage: uartpilot {start|stop|status} [ <serial port> [baudrate] ]\n");
-	fprintf(stderr, "       (default: %s / %d)\n\n", UARTPILOT_DEVICE, UARTPILOT_BAUDRATE);
+	if (reason) warnx("%s\n", reason);
+	warnx("Usage: uartpilot {start|stop|status} [ <serial port> [baudrate] ]\n");
+	warnx("       (default: %s / %d)\n\n", UARTPILOT_DEVICE, UARTPILOT_BAUDRATE);
 	exit(1);
 }
 
+static inline void uartprintf(int fd, const char *format, ...) {
+	va_list p_arg;
+	char buf[UARTPILOT_MAX_MSG_LEN];
+
+	vsnprintf(buf, UARTPILOT_MAX_MSG_LEN, format, p_arg);
+	dprintf(fd, buf);
+}
+
+static inline uint8_t convert(double val) {
+	return (uint8_t) (val * 127.5 - 0.5);
+}
+
 __EXPORT int uartpilot_main(int argc, char *argv[]);
+
 int uartpilot_main(int argc, char *argv[])
 {
-	if (argc < 2) {
-		usage("uartpilot: Missing command");
-	}
+	if (argc < 2) usage("Missing command!");
 
-	if (!strcmp(argv[1], "start")) {
+	if (strcmp(argv[1], "start") == 0) {
 		if (thread_running) {
-			warnx("uartpilot: Already running\n");
+			warnx("uartpilot is already running!\n");
 			exit(0);
 		}
 
@@ -100,27 +86,27 @@ int uartpilot_main(int argc, char *argv[])
 		exit(0);
 	}
 
-	if (!strcmp(argv[1], "stop")) {
+	if (strcmp(argv[1], "stop") == 0) {
 		thread_should_exit = true;
 		exit(0);
 	}
 
-	if (!strcmp(argv[1], "status")) {
-		if (thread_running) {
-			warnx("uartpilot is running.");
-
-		} else {
-			warnx("uartpilot is stopped.");
-		}
+	if (strcmp(argv[1], "status") == 0) {
+		if (thread_running) warnx("uartpilot is running.");
+		else warnx("uartpilot is stopped.");
 		exit(0);
 	}
 
-	usage("uartpilot: Unrecognized command");
+	usage("Unrecognized command!");
 	exit(1);
 }
 
 int uartpilot_thread_main(int argc, char *argv[])
 {
+/****************************************************************************
+ * Setup UART
+ ****************************************************************************/
+
 	char *uart_name = UARTPILOT_DEVICE;
 	unsigned uart_speed = UARTPILOT_BAUDRATE;
 
@@ -131,19 +117,13 @@ int uartpilot_thread_main(int argc, char *argv[])
 
 		errno = 0;
 		long conv = strtoul(argv[2], NULL, 10);
-		if (errno != 0 || conv > INT_MAX) {
-			warnx("uartpilot: Invalid baud rate specified, using %d!\n", uart_speed);
-		} else {
-			uart_speed = conv;
-		}
+		if (errno != 0 || conv > INT_MAX) err(1, "Invalid baud rate specified!");
 	}
 
-	warnx("uartpilot: Opening port %s (baudrate %d)", uart_name, uart_speed);
+	warnx("Opening port %s (baudrate %d)", uart_name, uart_speed);
 	int uart_fd = open(uart_name, O_RDWR | O_NOCTTY);
 
-	if (uart_fd < 0) {
-		err(1, "uartpilot: Error opening port: %s", uart_name);
-	}
+	if (uart_fd < 0) err(1, "Error opening port: %s", uart_name);
 
 	/* Try to set baud rate */
 	struct termios uart_config;
@@ -151,88 +131,101 @@ int uartpilot_thread_main(int argc, char *argv[])
 
 	/* Back up the original uart configuration to restore it after exit */
 	if ((termios_state = tcgetattr(uart_fd, &uart_config)) < 0) {
-		warnx("uartpilot: Error backing up uart config on %s: %d\n", uart_name, termios_state);
 		close(uart_fd);
-		return -1;
+		err(1, "Error backing up uart config on %s: %d\n", uart_name, termios_state);
 	}
 
 	/* USB serial is indicated by /dev/ttyACM0*/
 	if (strcmp(uart_name, "/dev/ttyACM0") != OK && strcmp(uart_name, "/dev/ttyACM1") != OK) {
-
 		/* Set baud rate */
 		if (cfsetispeed(&uart_config, uart_speed) < 0 || cfsetospeed(&uart_config, uart_speed) < 0) {
-			warnx("uartpilot: Error setting baudrate on %s: %d\n", uart_name, termios_state);
 			close(uart_fd);
-			return -1;
+			err(1, "Error setting baudrate on %s: %d\n", uart_name, termios_state);
 		}
-
 	}
 
 	if ((termios_state = tcsetattr(uart_fd, TCSANOW, &uart_config)) < 0) {
-		warnx("uartpilot: Error setting config on %s\n", uart_name);
 		close(uart_fd);
-		return -1;
+		err(1, "Error setting config on %s\n", uart_name);
 	}
 
+/****************************************************************************
+ * Setup ORB subscriptions
+ ****************************************************************************/
+
+	/* Subscribe armed actuator and prepare structure for storing data */
 	int sub_armed = orb_subscribe(ORB_ID(actuator_armed));
 
 	struct actuator_armed_s s_armed;
-	s_armed.armed = false; // Start disarmed
+	s_armed.armed = false;
 	s_armed.prearmed = false;
 
+	/* Subscribe to control groups and prepare structure for storing data */
 	int sub_controls[1];
 	sub_controls[0] = orb_subscribe(ORB_ID(actuator_controls_0));
 	//orb_set_interval(_sub_controls, 10);    TODO Don't limit poll intervall for now, 250 Hz should be fine.
+
+	struct actuator_controls_s s_controls;
 
 	px4_pollfd_struct_t fds_poll[1];
 	fds_poll[0].fd     = sub_controls[0];
 	fds_poll[0].events = POLLIN;
 
-	struct actuator_controls_s s_controls;
+/****************************************************************************
+ * Main loop, poll ORB and send commands to UART
+ ****************************************************************************/
 
 	thread_running = true;
-	dprintf(uart_fd, "$AGSTAT %d\r\n",thread_running);
+
+#ifdef UARTPILOT_EXTENDED_MSGS
+	uartprintf(uart_fd, "AGSTA,%d",thread_running);
+#endif
+
 	while (!thread_should_exit) {
 		int pret = px4_poll(fds_poll, (sizeof(fds_poll) / sizeof(fds_poll[0])), UARTPILOT_POLL_MILIS);
 
 #ifdef UARTPILOT_DEBUG
 		orb_copy(ORB_ID(actuator_armed), sub_armed, &s_armed);
-		dprintf(uart_fd, "$DEBUG Poll returned %d\r\n", pret);
-		dprintf(uart_fd, "$DEBUG Armed: %d Prearmed: %d Ready to arm: %d Lockdown: %d Force Failsafe: %d ESC Calibration: %d\r\n", s_armed.armed, s_armed.prearmed, s_armed.ready_to_arm, s_armed.lockdown, s_armed.force_failsafe, s_armed.in_esc_calibration_mode);
+		uartprintf(uart_fd, "AGDBG,Poll returned %d", pret);
+		uartprintf(uart_fd, "AGARM,%d,%d,%d,%d,%d,%d", s_armed.armed, s_armed.prearmed, s_armed.ready_to_arm, s_armed.lockdown, s_armed.force_failsafe, s_armed.in_esc_calibration_mode);
 #endif
 
-		/* Timed out, do a periodic check for _task_should_exit. */
-		if (pret == 0) {
-			continue;
-		}
+		/* Timed out, do a periodic check for thread_should_exit. */
+		if (pret == 0) continue;
 
 		/* This is undesirable but not much we can do. */
 		if (pret < 0) {
-			PX4_WARN("poll error %d, %d", pret, errno);
+			warnx("Poll error %d, %d!", pret, errno);
 			usleep(100000);
 			continue;
 		}
 
 		if (fds_poll[0].revents & POLLIN) {
 			orb_copy(ORB_ID(actuator_controls_0), sub_controls[0], &s_controls);
-			dprintf(uart_fd, "$AGCOD 0 %06.4f %06.4f %06.4f %06.4f %06.4f %06.4f %06.4f %06.4f %llu\r\n", (double) s_controls.control[0], (double) s_controls.control[1], (double) s_controls.control[2], (double) s_controls.control[3], (double) s_controls.control[4], (double) s_controls.control[5], (double) s_controls.control[6], (double) s_controls.control[7], s_controls.timestamp);
+			uartprintf(uart_fd, "AGCOD,%d,%d", convert(s_controls.control[3]), convert( s_controls.control[2]));
 		}
 
+#if !defined(UARTPILOT_DEBUG) && defined(UARTPILOT_EXTENDED_MSGS)
 		bool updated;
 		orb_check(sub_armed, &updated);
 		if (updated) {
 			orb_copy(ORB_ID(actuator_armed), sub_armed, &s_armed);
-			dprintf(uart_fd, "$AGARM %d %d %d %d %d %d\r\n", s_armed.armed, s_armed.prearmed, s_armed.ready_to_arm, s_armed.lockdown, s_armed.force_failsafe, s_armed.in_esc_calibration_mode);
+			uartprintf(uart_fd, "AGARM,%d,%d,%d,%d,%d,%d", s_armed.armed, s_armed.prearmed, s_armed.ready_to_arm, s_armed.lockdown, s_armed.force_failsafe, s_armed.in_esc_calibration_mode);
 		}
+#endif
 	}
 
+/****************************************************************************
+ * Cleanup and exit
+ ****************************************************************************/
 	thread_running = false;
 	orb_unsubscribe(sub_controls[0]);
 	orb_unsubscribe(sub_armed);
 
-	dprintf(uart_fd, "$AGSTAT %d\r\n",thread_running);
+#ifdef UARTPILOT_EXTENDED_MSGS
+	uartprintf(uart_fd, "AGSTA,%d",thread_running);
+#endif
 
-	warnx("uartpilot: Exiting");
-	fflush(stdout);
+	warnx("Exiting...");
 	return 0;
 }
