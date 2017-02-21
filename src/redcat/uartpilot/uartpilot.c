@@ -195,6 +195,11 @@ int uartpilot_thread_main(int argc, char *argv[])
 		uartprintf(uart_fd, "AGARM,%d,%d,%d,%d,%d,%d", s_armed.armed, s_armed.prearmed, s_armed.ready_to_arm, s_armed.lockdown, s_armed.force_failsafe, s_armed.in_esc_calibration_mode);
 #endif
 
+#ifdef UARTPILOT_TEST
+		uartprintf(uart_fd, "AGCOD,%d,%d", convert(-0.783), convert(0.561));
+		continue;
+#endif
+
 		/* Timed out, do a periodic check for thread_should_exit. */
 		if (pret == 0) continue;
 
@@ -207,10 +212,10 @@ int uartpilot_thread_main(int argc, char *argv[])
 
 		if (fds_poll[0].revents & POLLIN) {
 			orb_copy(ORB_ID(actuator_controls_0), sub_controls[0], &s_controls);
-			uartprintf(uart_fd, "AGCOD,%d,%d", convert(s_controls.control[3]), convert( s_controls.control[2]));
+			uartprintf(uart_fd, "AGCOD,%d,%d", convert(s_controls.control[3]), convert(s_controls.control[2]));
 		}
 
-#if !defined(UARTPILOT_DEBUG) && defined(UARTPILOT_EXTENDED_MSGS)
+#if defined(UARTPILOT_EXTENDED_MSGS) && !defined(UARTPILOT_DEBUG) && !defined(UARTPILOT_TEST)
 		bool updated;
 		orb_check(sub_armed, &updated);
 		if (updated) {
