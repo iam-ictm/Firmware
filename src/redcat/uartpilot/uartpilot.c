@@ -53,10 +53,12 @@ static void usage(const char *reason)
 }
 
 static void uartprintf(int fd, const char *format, ...) {
-	va_list p_arg;
-
 	char msg[UARTPILOT_MAX_MSG_LEN];
-	vsnprintf(msg, UARTPILOT_MAX_MSG_LEN, format, p_arg);
+
+	va_list argp;
+	va_start(argp, format);
+	vsnprintf(msg, UARTPILOT_MAX_MSG_LEN, format, argp);
+	va_end(argp);
 
 	uint8_t checksum = 0;
 	char *c = msg;
