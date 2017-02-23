@@ -40,8 +40,8 @@
  * Definitions
  ****************************************************************************/
 
-#define UARTPILOT_DEBUG 1
-#define UARTPILOT_TEST 1
+//#define UARTPILOT_DEBUG 1
+//#define UARTPILOT_TEST 1
 #define UARTPILOT_EXTENDED_MSGS 1
 
 #ifndef UARTPILOT_DEVICE
