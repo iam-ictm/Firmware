@@ -60,15 +60,15 @@ static void uartprintf(int fd, const char *format, ...) {
 	vsnprintf(msg, UARTPILOT_MAX_MSG_LEN, format, argp);
 	va_end(argp);
 
-	uint8_t checksum = 0;
+	int8_t checksum = 0;
 	char *c = msg;
 	while(*c) checksum ^= *c++;
 
 	dprintf(fd, "$%s*%02x\r\n", msg, checksum);
 }
 
-static inline uint8_t convert(double val) {
-	return (uint8_t) (val * 127.5 - 0.5);
+static inline int8_t convert(double val) {
+	return (int8_t) (val * 127.5 - 0.5);
 }
 
 __EXPORT int uartpilot_main(int argc, char *argv[]);
