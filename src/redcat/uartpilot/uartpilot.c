@@ -115,7 +115,7 @@ int uartpilot_thread_main(int argc, char *argv[])
  ****************************************************************************/
 
 	char *uart_name = UARTPILOT_DEVICE;
-	unsigned uart_speed = UARTPILOT_BAUDRATE;
+	unsigned long uart_speed = UARTPILOT_BAUDRATE;
 
 	if (argc == 2) {
 		uart_name = argv[1];
@@ -123,8 +123,8 @@ int uartpilot_thread_main(int argc, char *argv[])
 		uart_name = argv[1];
 
 		errno = 0;
-		long conv = strtoul(argv[2], NULL, 10);
-		if (errno != 0 || conv > INT_MAX) err(1, "Invalid baud rate specified!");
+		uart_speed = strtoul(argv[2], NULL, 10);
+		if (errno != 0 || uart_speed > INT_MAX) err(1, "Invalid baud rate specified!");
 	}
 
 	warnx("Opening port %s (baudrate %d)", uart_name, uart_speed);
